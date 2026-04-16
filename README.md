@@ -2,12 +2,6 @@
 
 Mobile-first RSVP (Rapid Serial Visual Presentation) reader built with Vite + React.
 
-## Screenshots
-
-![Main screen](./main-screen.png)
-![Upload screen](./upload-screen.png)
-![Upload completed](./upload-completed.png)
-
 ## What You Can Do
 
 - Create an account, sign in, and stay signed in (token stored locally)
