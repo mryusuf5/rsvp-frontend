@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../lib/api'
 import BottomNav from '../components/BottomNav'
@@ -9,8 +9,14 @@ export default function Upload() {
   const [done, setDone] = useState(null)
   const [error, setError] = useState('')
   const [dragOver, setDragOver] = useState(false)
+  const [showCompleteAnim, setShowCompleteAnim] = useState(false)
   const inputRef = useRef()
+  const completeTimerRef = useRef(null)
   const navigate = useNavigate()
+
+  useEffect(() => {
+    return () => clearTimeout(completeTimerRef.current)
+  }, [])
 
   function handleFileSelect(selected) {
     setError('')
@@ -28,12 +34,19 @@ export default function Upload() {
     if (!file) return
     setError('')
     setUploading(true)
+    setShowCompleteAnim(false)
     try {
       const form = new FormData()
       form.append('file', file)
       const { data } = await api.post('/books/upload', form)
       setDone(data)
       setFile(null)
+
+      clearTimeout(completeTimerRef.current)
+      setShowCompleteAnim(true)
+      completeTimerRef.current = setTimeout(() => {
+        setShowCompleteAnim(false)
+      }, 2300)
     } catch (err) {
       setError(err.response?.data?.message || err.response?.data?.detail || 'Upload failed. Please try again.')
     } finally {
@@ -50,6 +63,41 @@ export default function Upload() {
 
   return (
     <div className="flex flex-col min-h-dvh pb-24">
+      {/* Upload complete animation overlay */}
+      {showCompleteAnim && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/20 rsvp-fade-in" aria-hidden />
+          <div className="relative w-full max-w-[430px] h-full px-5 py-6">
+            <div
+              className="h-full rounded-[44px] rsvp-fade-in flex flex-col items-center justify-center text-center"
+              style={{ background: 'var(--rsvp-upload-complete-bg)' }}
+              role="status"
+              aria-live="polite"
+            >
+              <div className="w-24 h-24 rounded-full bg-shade-white grid place-items-center rsvp-pop-in">
+                <svg
+                  width="44"
+                  height="44"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  className="text-primary-1 rsvp-check-draw"
+                  aria-hidden
+                >
+                  <path
+                    d="M20 6L9 17l-5-5"
+                    stroke="currentColor"
+                    strokeWidth="2.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </div>
+              <p className="mt-8 text-shade-white text-[22px] font-medium">Uploading completed</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="px-6 pt-14 pb-6">
         <div className="flex items-start justify-between">

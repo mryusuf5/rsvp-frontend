@@ -4,12 +4,44 @@ import api from '../lib/api'
 
 function WordDisplay({ word }) {
   if (!word) return <span className="text-neutral-6 text-4xl font-bold">•••</span>
-  const ci = Math.floor(word.length / 2)
+
+  // Highlight the fixation point.
+  // We ignore '.' and ',' when deciding which letter(s) are the middle.
+  // Odd counted letters: highlight the single middle letter.
+  // Even counted letters: highlight the two middle letters.
+  const letterIdx = []
+  for (let i = 0; i < word.length; i++) {
+    const ch = word[i]
+    if (ch === '.' || ch === ',') continue
+    letterIdx.push(i)
+  }
+
+  const highlight = new Array(word.length).fill(false)
+  if (letterIdx.length > 0) {
+    const n = letterIdx.length
+    const left = Math.floor((n - 1) / 2)
+    const right = Math.ceil((n - 1) / 2)
+    highlight[letterIdx[left]] = true
+    highlight[letterIdx[right]] = true
+  }
+
+  const parts = []
+  for (let i = 0; i < word.length;) {
+    const isHi = highlight[i]
+    let j = i + 1
+    while (j < word.length && highlight[j] === isHi) j++
+    const text = word.slice(i, j)
+    parts.push(
+      <span key={`${i}-${j}`} className={isHi ? 'rsvp-reader-accent' : 'text-shade-white opacity-90'}>
+        {text}
+      </span>
+    )
+    i = j
+  }
+
   return (
     <div className="flex items-baseline justify-center font-bold text-4xl tracking-wide select-none">
-      <span className="text-shade-white opacity-90">{word.slice(0, ci)}</span>
-      <span className="rsvp-reader-accent">{word[ci]}</span>
-      <span className="text-shade-white opacity-90">{word.slice(ci + 1)}</span>
+      {parts}
     </div>
   )
 }
@@ -52,6 +84,16 @@ export default function Reader() {
     saveTimerRef.current = setTimeout(() => {
       api.put(`/progress/${bookId}`, { pageNumber: pageNum, wordIndex: wi }).catch(() => {})
     }, 600)
+  }, [bookId])
+
+  const saveProgressNow = useCallback(async (pageNum, wi) => {
+    // Flush any pending debounced save, then save immediately.
+    clearTimeout(saveTimerRef.current)
+    try {
+      await api.put(`/progress/${bookId}`, { pageNumber: pageNum, wordIndex: wi })
+    } catch {
+      // ignore
+    }
   }, [bookId])
 
   const loadPage = useCallback(async (pageNum, startIdx = 0) => {
@@ -266,9 +308,9 @@ export default function Reader() {
     }
   }
 
-  function handleBack() {
+  async function handleBack() {
     clearInterval(intervalRef.current)
-    saveProgress(stateRef.current.currentPage, stateRef.current.wordIdx)
+    await saveProgressNow(stateRef.current.currentPage, stateRef.current.wordIdx)
     navigate(-1)
   }
 

@@ -4,14 +4,48 @@ import api from '../lib/api'
 import BottomNav from '../components/BottomNav'
 import { useBookCover } from '../hooks/useBookCover'
 
+function clamp(n, min, max) {
+  return Math.min(max, Math.max(min, n))
+}
+
+// Approximate percent complete. We don't have per-page word counts here, so we
+// use the same 300-words-per-page assumption used elsewhere in the UI.
+function calcProgressPct(book, progress) {
+  if (!book || !progress || progress.id == null) return 0
+
+  const totalPages = Math.max(1, Number(book.totalPages || 1))
+  const pageNumber = Number(progress.pageNumber || 1)
+  const wordIndex = Number(progress.wordIndex || 0)
+
+  // If we're on (or past) the final page, treat as complete.
+  // We don't know the exact word count of that page in this view.
+  if (pageNumber >= totalPages) return 100
+
+  const withinPage = clamp(wordIndex / 300, 0, 1)
+  const pagesDone = Math.max(0, pageNumber - 1) + withinPage
+  return clamp((pagesDone / totalPages) * 100, 0, 100)
+}
+
+function isCompleted(book, progress) {
+  return !!book && !!progress && progress.id != null && Number(progress.pageNumber || 0) >= Number(book.totalPages || 0)
+}
+
+function formatPct(pct) {
+  if (pct <= 0) return '0%'
+  if (pct >= 100) return '100%'
+  // Avoid showing "0%" when there is real progress.
+  if (pct < 1) return `${pct.toFixed(1)}%`
+  return `${Math.round(pct)}%`
+}
+
 function BookInfoSheet({ book, progress, onClose, onDelete, onRead }) {
   const { url: coverUrl, status: coverStatus } = useBookCover(book.title, book.author, book.format === 'epub')
   const [coverError, setCoverError] = useState(false)
   const [coverImgLoaded, setCoverImgLoaded] = useState(false)
   const wpm = parseInt(localStorage.getItem('wpm') || '250')
   const started = progress?.id != null
-  const completed = started && progress.pageNumber >= book.totalPages
-  const pct = started ? Math.min(100, Math.round((progress.pageNumber / book.totalPages) * 100)) : 0
+  const pct = calcProgressPct(book, progress)
+  const completed = isCompleted(book, progress)
   const totalWords = book.totalWords ?? 0
   const uploadDate = new Date(book.uploadedAt).toLocaleDateString('en-US', {
     day: 'numeric', month: 'long', year: 'numeric'
@@ -161,7 +195,7 @@ function BookInfoSheet({ book, progress, onClose, onDelete, onRead }) {
             <div className="bg-neutral-1 rounded-2xl px-4 py-3">
               <p className="text-[11px] text-neutral-5 uppercase tracking-wider font-semibold">Progress</p>
               <p className={`text-[22px] font-bold mt-0.5 ${completed ? 'text-green-500' : 'text-neutral-8'}`}>
-                {completed ? '✓ Done' : `${pct}%`}
+                {completed ? '✓ Done' : formatPct(pct)}
               </p>
               {!completed && started && (
                 <div className="mt-2 h-1.5 rounded-full bg-neutral-2 overflow-hidden" aria-hidden>
@@ -211,7 +245,8 @@ function BookInfoSheet({ book, progress, onClose, onDelete, onRead }) {
 function BookItem({ book, progress, onClick, onInfo }) {
   const wpm = parseInt(localStorage.getItem('wpm') || '250')
   const started = progress?.id != null
-  const completed = started && progress.pageNumber >= book.totalPages
+  const pct = calcProgressPct(book, progress)
+  const completed = isCompleted(book, progress)
   const { url: coverUrl, status: coverStatus } = useBookCover(book.title, book.author, book.format === 'epub')
   const [coverError, setCoverError] = useState(false)
   const [coverImgLoaded, setCoverImgLoaded] = useState(false)
@@ -223,10 +258,6 @@ function BookItem({ book, progress, onClick, onInfo }) {
 
   const isEpub = book.format === 'epub'
   const showCoverSpinner = isEpub && !coverError && !coverImgLoaded && (coverStatus === 'loading' || coverStatus === 'success')
-
-  const pct = started
-    ? Math.min(100, Math.round((progress.pageNumber / book.totalPages) * 100))
-    : 0
 
   const remainingPages = book.totalPages - (progress?.pageNumber ?? 0)
   const minutes = Math.round((remainingPages * 300) / wpm)
@@ -269,7 +300,7 @@ function BookItem({ book, progress, onClick, onInfo }) {
           ) : (
             <div className="mt-0.5">
               <p className="text-[12px] text-neutral-4">
-                {started ? `${pct}% · ${minutes} min to go` : 'Not started'}
+                {started ? `${formatPct(pct)} · ${minutes} min to go` : 'Not started'}
               </p>
               {started && (
                 <div className="mt-1.5 h-1.5 rounded-full bg-neutral-2 overflow-hidden" aria-hidden>
@@ -381,9 +412,8 @@ export default function Home() {
   }
 
   const wpm = parseInt(localStorage.getItem('wpm') || '250')
-  const lastReadPct = lastRead
-    ? Math.min(100, Math.round((lastRead.pageNumber / lastRead.book.totalPages) * 100))
-    : 0
+  const lastReadPct = lastRead ? calcProgressPct(lastRead.book, lastRead) : 0
+  const lastReadCompleted = lastRead ? isCompleted(lastRead.book, lastRead) : false
   const lastReadMinutes = lastRead
     ? Math.round(((lastRead.book.totalPages - lastRead.pageNumber) * 300) / wpm)
     : 0
@@ -426,7 +456,13 @@ export default function Home() {
               {lastRead.book.title}
             </p>
             <p className="text-[13px] text-neutral-4 mb-4">
-              {lastReadMinutes > 0 ? `${lastReadMinutes} minutes to go · ` : ''}{lastReadPct}%
+              {lastReadCompleted ? (
+                <span className="text-green-500 font-medium">Completed</span>
+              ) : (
+                <>
+                  {lastReadMinutes > 0 ? `${lastReadMinutes} minutes to go · ` : ''}{formatPct(lastReadPct)}
+                </>
+              )}
             </p>
             <button
               onClick={() => navigate(`/reader/${lastRead.book.id}`)}
