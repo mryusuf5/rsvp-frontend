@@ -3,6 +3,26 @@ import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import './index.css'
 
+// Apply font early to avoid flash.
+try {
+  const fontMap = {
+    inter: "'Inter', system-ui, sans-serif",
+    roboto: "'Roboto', sans-serif",
+    'open-sans': "'Open Sans', sans-serif",
+    nunito: "'Nunito', sans-serif",
+    lato: "'Lato', sans-serif",
+    merriweather: "'Merriweather', serif",
+    lora: "'Lora', serif",
+    playfair: "'Playfair Display', serif",
+    crimson: "'Crimson Text', serif",
+    'source-code': "'Source Code Pro', monospace",
+  }
+  const savedFont = localStorage.getItem('font')
+  if (savedFont && fontMap[savedFont]) {
+    document.documentElement.style.setProperty('--c-font-family', fontMap[savedFont])
+  }
+} catch {}
+
 // Apply theme early to avoid flash.
 try {
   // Back-compat cleanup: older builds used a class toggle.

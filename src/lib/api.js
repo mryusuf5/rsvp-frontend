@@ -1,7 +1,16 @@
 import axios from 'axios'
 
+const API_BASE = import.meta.env.VITE_API_URL ?? '/api'
+export const API_ORIGIN = API_BASE.replace(/\/api$/, '')
+
+export function resolveUrl(path) {
+  if (!path) return null
+  if (path.startsWith('http')) return path
+  return API_ORIGIN + path
+}
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE,
   headers: {
     Accept: 'application/json',
     'Content-Type': 'application/json',
@@ -23,7 +32,8 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    const url = error.config?.url ?? ''
+    if (error.response?.status === 401 && !url.includes('/login') && !url.includes('/register')) {
       localStorage.removeItem('token')
       localStorage.removeItem('user')
       window.location.href = '/login'

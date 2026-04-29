@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import api from '../lib/api'
+import { checkTierBadges, getReadingStats, updateReadingStats } from '../lib/badges'
+import BadgeToast from '../components/BadgeToast'
 
 function WordDisplay({ word }) {
-  if (!word) return <span className="text-neutral-6 text-4xl font-bold">•••</span>
+  if (!word) return <span className="text-neutral-6 text-2xl sm:text-4xl font-bold">•••</span>
 
   // Highlight the fixation point.
   // We ignore '.' and ',' when deciding which letter(s) are the middle.
@@ -32,7 +34,7 @@ function WordDisplay({ word }) {
     while (j < word.length && highlight[j] === isHi) j++
     const text = word.slice(i, j)
     parts.push(
-      <span key={`${i}-${j}`} className={isHi ? 'rsvp-reader-accent' : 'text-shade-white opacity-90'}>
+      <span key={`${i}-${j}`} className={isHi ? 'rsvp-reader-accent' : 'text-neutral-8 opacity-90'}>
         {text}
       </span>
     )
@@ -40,7 +42,7 @@ function WordDisplay({ word }) {
   }
 
   return (
-    <div className="flex items-baseline justify-center font-bold text-4xl tracking-wide select-none">
+    <div className="flex items-baseline justify-center font-bold text-2xl sm:text-4xl tracking-wide select-none">
       {parts}
     </div>
   )
@@ -67,12 +69,26 @@ export default function Reader() {
   const [chapterTitle, setChapterTitle] = useState('')
   const [contentStart, setContentStart] = useState(null)
   const [findingContentStart, setFindingContentStart] = useState(false)
+  const [badgeQueue, setBadgeQueue] = useState([])
+
+  const [todayStats, setTodayStats] = useState(() => {
+    try {
+      const today = new Date().toISOString().slice(0, 10)
+      const stored = JSON.parse(localStorage.getItem('readingToday') || 'null')
+      return stored?.date === today ? { words: stored.words || 0, pages: stored.pages || 0 } : { words: 0, pages: 0 }
+    } catch { return { words: 0, pages: 0 } }
+  })
 
   // Refs that always hold latest values — used inside setInterval
   const stateRef = useRef({ words: [], wordIdx: 0, currentPage: 1, isPlaying: false, book: null, wpm: 250 })
   const intervalRef = useRef(null)
   const saveTimerRef = useRef(null)
   const loadingNextPageRef = useRef(false)
+  const sessionWordsRef = useRef(0)
+  const sessionPagesRef = useRef(0)
+  const awardAndShowRef = useRef((ids) => {
+    if (ids.length > 0) setBadgeQueue(q => [...q, ...ids])
+  })
 
   // Keep stateRef in sync
   useEffect(() => {
@@ -82,6 +98,7 @@ export default function Reader() {
   const saveProgress = useCallback((pageNum, wi) => {
     clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(() => {
+      localStorage.setItem('lastReadAt', new Date().toISOString())
       api.put(`/progress/${bookId}`, { pageNumber: pageNum, wordIndex: wi }).catch(() => {})
     }, 600)
   }, [bookId])
@@ -95,6 +112,66 @@ export default function Reader() {
       // ignore
     }
   }, [bookId])
+
+  const flushSession = useCallback(() => {
+    const w = sessionWordsRef.current
+    const p = sessionPagesRef.current
+    if (w === 0 && p === 0) return
+    sessionWordsRef.current = 0
+    sessionPagesRef.current = 0
+    try {
+      const today = new Date().toISOString().slice(0, 10)
+      const stored = JSON.parse(localStorage.getItem('readingToday') || 'null')
+      const newWords = (!stored || stored.date !== today) ? w : stored.words + w
+      const newPages = (!stored || stored.date !== today) ? p : stored.pages + p
+      localStorage.setItem('readingToday', JSON.stringify({ date: today, words: newWords, pages: newPages }))
+      setTodayStats({ words: newWords, pages: newPages })
+
+      const stats = getReadingStats()
+      const newTotalWords = (stats.totalWords || 0) + w
+      const newTotalPages = (stats.totalPages || 0) + p
+
+      // Streak tracking
+      let newStreak = stats.readingStreak || 0
+      const lastDate = stats.lastReadDate
+      if (!lastDate || lastDate !== today) {
+        const prev = new Date(today)
+        prev.setDate(prev.getDate() - 1)
+        newStreak = (lastDate === prev.toISOString().slice(0, 10)) ? newStreak + 1 : 1
+      }
+      const newLongestStreak = Math.max(stats.longestStreak || 0, newStreak)
+
+      // Daily goal hit count (once per day)
+      const goal = (() => { try { return JSON.parse(localStorage.getItem('readingGoal') || 'null') } catch { return null } })()
+      let newDailyGoalsHit = stats.dailyGoalsHit || 0
+      let hitGoalToday = false
+      if (goal?.enabled) {
+        const current = goal.type === 'words' ? newWords : newPages
+        if (current >= goal.target && stats.dailyGoalLastDate !== today) {
+          newDailyGoalsHit++
+          hitGoalToday = true
+        }
+      }
+
+      const statsPatch = {
+        totalWords: newTotalWords, totalPages: newTotalPages,
+        readingStreak: newStreak, longestStreak: newLongestStreak, lastReadDate: today,
+      }
+      if (hitGoalToday) {
+        statsPatch.dailyGoalsHit = newDailyGoalsHit
+        statsPatch.dailyGoalLastDate = today
+      }
+      updateReadingStats(statsPatch)
+
+      const newBadges = [
+        ...checkTierBadges('reader', newTotalWords),
+        ...checkTierBadges('page_turner', newTotalPages),
+        ...checkTierBadges('dedicated', newLongestStreak),
+        ...(hitGoalToday ? checkTierBadges('daily_achiever', newDailyGoalsHit) : []),
+      ]
+      if (newBadges.length > 0) awardAndShowRef.current(newBadges)
+    } catch {}
+  }, [])
 
   const loadPage = useCallback(async (pageNum, startIdx = 0) => {
     setPageLoading(true)
@@ -154,8 +231,9 @@ export default function Reader() {
     return () => {
       clearInterval(intervalRef.current)
       clearTimeout(saveTimerRef.current)
+      flushSession()
     }
-  }, [bookId])
+  }, [bookId, flushSession])
 
   // Interval
   useEffect(() => {
@@ -178,15 +256,24 @@ export default function Reader() {
           clearInterval(intervalRef.current)
           setIsPlaying(false)
           stateRef.current.isPlaying = false
+          sessionWordsRef.current++
+          flushSession()
           saveProgress(s.currentPage, s.wordIdx)
+          const stats = getReadingStats()
+          const newBooksCompleted = (stats.booksCompleted || 0) + 1
+          updateReadingStats({ booksCompleted: newBooksCompleted })
+          awardAndShowRef.current(checkTierBadges('bookworm', newBooksCompleted))
           return
         }
+        sessionWordsRef.current++
+        sessionPagesRef.current++
         loadingNextPageRef.current = true
         saveProgress(s.currentPage + 1, 0)
         loadPage(s.currentPage + 1, 0)
       } else {
         setWordIdx(nextIdx)
         stateRef.current.wordIdx = nextIdx
+        sessionWordsRef.current++
         if (nextIdx % 20 === 0) saveProgress(s.currentPage, nextIdx)
       }
     }, ms)
@@ -198,7 +285,10 @@ export default function Reader() {
     const next = !isPlaying
     setIsPlaying(next)
     stateRef.current.isPlaying = next
-    if (!next) saveProgress(stateRef.current.currentPage, stateRef.current.wordIdx)
+    if (!next) {
+      flushSession()
+      saveProgress(stateRef.current.currentPage, stateRef.current.wordIdx)
+    }
   }
 
   function handleWpmChange(val) {
@@ -206,6 +296,7 @@ export default function Reader() {
     setWpm(clamped)
     localStorage.setItem('wpm', String(clamped))
     stateRef.current.wpm = clamped
+    awardAndShowRef.current(checkTierBadges('speed_demon', clamped))
   }
 
   function stepBack() {
@@ -310,6 +401,7 @@ export default function Reader() {
 
   async function handleBack() {
     clearInterval(intervalRef.current)
+    flushSession()
     await saveProgressNow(stateRef.current.currentPage, stateRef.current.wordIdx)
     navigate(-1)
   }
@@ -323,18 +415,27 @@ export default function Reader() {
     : 0
   const minutesLeft = Math.round(remainingWords / wpm)
 
+  const readingGoal = (() => {
+    try { return JSON.parse(localStorage.getItem('readingGoal') || 'null') } catch { return null }
+  })()
+  const liveWords = todayStats.words + sessionWordsRef.current
+  const livePages = todayStats.pages + sessionPagesRef.current
+  const goalCurrent = readingGoal?.enabled ? (readingGoal.type === 'words' ? liveWords : livePages) : 0
+  const goalPct = readingGoal?.enabled ? Math.min(100, Math.round((goalCurrent / readingGoal.target) * 100)) : 0
+  const goalDone = readingGoal?.enabled && goalCurrent >= readingGoal.target
+
   if (loading) {
     return (
-      <div className="flex flex-col min-h-dvh bg-neutral-8 items-center justify-center">
+      <div className="flex flex-col min-h-dvh bg-shade-white items-center justify-center">
         <div className="w-8 h-8 border-2 border-primary-1 border-t-transparent rounded-full animate-spin" />
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col min-h-dvh bg-neutral-8 select-none" onClick={() => setShowControls(p => !p)}>
+    <div className="flex flex-col min-h-dvh bg-shade-white select-none" onClick={() => setShowControls(p => !p)}>
       {/* Progress bar */}
-      <div className="h-0.5 bg-neutral-7 shrink-0">
+      <div className={`bg-neutral-2 shrink-0 transition-all duration-300 ${showControls ? 'h-2' : 'h-0.5'}`}>
         <div className="h-full bg-primary-1 transition-all duration-500" style={{ width: `${progress}%` }} />
       </div>
 
@@ -352,7 +453,7 @@ export default function Reader() {
         <div className="flex items-center gap-3">
           <div className="text-right">
             {chapterTitle && (
-              <p className="text-[12px] text-neutral-5 truncate max-w-[180px]">{chapterTitle}</p>
+              <p className="text-[12px] text-neutral-5 truncate max-w-[120px] sm:max-w-[180px]">{chapterTitle}</p>
             )}
             <p className="text-[12px] text-neutral-6">p.{currentPage}/{book?.totalPages} · {minutesLeft}m left</p>
           </div>
@@ -361,7 +462,7 @@ export default function Reader() {
             <button
               onClick={contentStart && contentStart > currentPage ? skipToContent : findAndSkipFrontMatter}
               disabled={pageLoading || findingContentStart}
-              className="shrink-0 px-3 py-2 rounded-xl bg-neutral-7 active:bg-neutral-6 transition-colors disabled:opacity-30"
+              className="shrink-0 px-3 py-2 rounded-xl bg-neutral-2 active:bg-neutral-3 transition-colors disabled:opacity-30"
               title={contentStart && contentStart > currentPage ? `Skip to p.${contentStart}` : 'Find the start of the book'}
             >
               <span className="text-[12px] font-medium text-neutral-4">
@@ -380,9 +481,9 @@ export default function Reader() {
         {/* Guide lines */}
         <div className="relative w-full flex items-center justify-center">
           <div className="absolute left-0 right-0 flex items-center pointer-events-none px-4">
-            <div className="flex-1 h-px bg-neutral-7" />
+            <div className="flex-1 h-px bg-neutral-2" />
             <div className="w-40" />
-            <div className="flex-1 h-px bg-neutral-7" />
+            <div className="flex-1 h-px bg-neutral-2" />
           </div>
           <div className="relative min-w-[240px] min-h-[80px] flex items-center justify-center">
             {pageLoading ? (
@@ -403,25 +504,38 @@ export default function Reader() {
         className={`px-6 pb-14 pt-4 flex flex-col gap-5 transition-opacity duration-200 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
         onClick={e => e.stopPropagation()}
       >
+        {/* Daily goal */}
+        {readingGoal?.enabled && (
+          <div className="flex items-center gap-3 px-1">
+            <span className="text-[12px] text-neutral-5 tabular-nums shrink-0">
+              {goalCurrent.toLocaleString()} / {readingGoal.target.toLocaleString()} {readingGoal.type}
+            </span>
+            <div className="flex-1 h-1 rounded-full bg-neutral-2 overflow-hidden">
+              <div className="h-full bg-primary-1 rounded-full transition-all duration-300" style={{ width: `${goalPct}%` }} />
+            </div>
+            {goalDone && <span className="text-[11px] font-bold text-primary-1 shrink-0">Done!</span>}
+          </div>
+        )}
+
         {/* WPM */}
         <div className="flex items-center justify-center gap-5">
           <button
             onClick={() => handleWpmChange(wpm - 25)}
-            className="w-10 h-10 rounded-full bg-neutral-7 flex items-center justify-center active:bg-neutral-6 transition-colors"
+            className="w-10 h-10 rounded-full bg-neutral-2 flex items-center justify-center active:bg-neutral-3 transition-colors"
           >
-            <svg width="16" height="2" viewBox="0 0 16 2" fill="none" className="text-shade-white">
+            <svg width="16" height="2" viewBox="0 0 16 2" fill="none" className="text-neutral-8">
               <path d="M0 1h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
             </svg>
           </button>
-          <div className="text-center w-28">
-            <p className="text-[28px] font-bold text-shade-white leading-none">{wpm}</p>
-            <p className="text-[11px] text-neutral-5 uppercase tracking-wider mt-1">words / min</p>
+          <div className="text-center w-24">
+            <p className="text-[22px] font-bold text-neutral-8 leading-none">{wpm}</p>
+            <p className="text-[10px] text-neutral-5 uppercase tracking-wider mt-1">words / min</p>
           </div>
           <button
             onClick={() => handleWpmChange(wpm + 25)}
-            className="w-10 h-10 rounded-full bg-neutral-7 flex items-center justify-center active:bg-neutral-6 transition-colors"
+            className="w-10 h-10 rounded-full bg-neutral-2 flex items-center justify-center active:bg-neutral-3 transition-colors"
           >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="text-shade-white">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="text-neutral-8">
               <path d="M8 0v16M0 8h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
             </svg>
           </button>
@@ -431,7 +545,7 @@ export default function Reader() {
         <div className="flex items-center justify-center gap-7">
           <button
             onClick={stepBack}
-            className="w-12 h-12 rounded-full bg-neutral-7 flex items-center justify-center active:bg-neutral-6 transition-colors"
+            className="w-12 h-12 rounded-full bg-neutral-2 flex items-center justify-center active:bg-neutral-3 transition-colors"
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="text-neutral-4">
               <path d="M19 5L9 12l10 7V5Z" fill="currentColor"/>
@@ -457,7 +571,7 @@ export default function Reader() {
 
           <button
             onClick={stepForward}
-            className="w-12 h-12 rounded-full bg-neutral-7 flex items-center justify-center active:bg-neutral-6 transition-colors"
+            className="w-12 h-12 rounded-full bg-neutral-2 flex items-center justify-center active:bg-neutral-3 transition-colors"
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="text-neutral-4">
               <path d="M5 5l10 7-10 7V5Z" fill="currentColor"/>
@@ -471,25 +585,25 @@ export default function Reader() {
           <button
             onClick={goToPrevPage}
             disabled={currentPage <= 1 || pageLoading}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-neutral-7 active:bg-neutral-6 transition-colors disabled:opacity-30"
+            className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-neutral-2 active:bg-neutral-3 transition-colors disabled:opacity-30"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="text-neutral-4">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" className="text-neutral-4 shrink-0">
               <path d="M19 12H5M5 12l7-7M5 12l7 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
-            <span className="text-[13px] font-medium text-neutral-4">Prev page</span>
+            <span className="text-[12px] font-medium text-neutral-4">Prev</span>
           </button>
 
-          <span className="text-[13px] text-neutral-6 tabular-nums">
+          <span className="text-[12px] text-neutral-6 tabular-nums">
             {currentPage} / {book?.totalPages}
           </span>
 
           <button
             onClick={goToNextPage}
             disabled={!book || currentPage >= book.totalPages || pageLoading}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-neutral-7 active:bg-neutral-6 transition-colors disabled:opacity-30"
+            className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-neutral-2 active:bg-neutral-3 transition-colors disabled:opacity-30"
           >
-            <span className="text-[13px] font-medium text-neutral-4">Next page</span>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="text-neutral-4">
+            <span className="text-[12px] font-medium text-neutral-4">Next</span>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" className="text-neutral-4 shrink-0">
               <path d="M5 12h14M14 5l7 7-7 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </button>
@@ -500,7 +614,7 @@ export default function Reader() {
           <button
             onClick={skipToContent}
             disabled={pageLoading}
-            className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-neutral-7 active:bg-neutral-6 transition-colors disabled:opacity-30"
+            className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-neutral-2 active:bg-neutral-3 transition-colors disabled:opacity-30"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="text-neutral-4">
               <path d="M5 5l10 7-10 7V5Z" fill="currentColor"/>
@@ -512,6 +626,10 @@ export default function Reader() {
           </button>
         )}
       </div>
+
+      {badgeQueue.length > 0 && (
+        <BadgeToast badgeId={badgeQueue[0]} onDismiss={() => setBadgeQueue(q => q.slice(1))} />
+      )}
     </div>
   )
 }

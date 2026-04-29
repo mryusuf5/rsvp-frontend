@@ -1,8 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import api from '../lib/api'
 import BottomNav from '../components/BottomNav'
 import { useBookCover } from '../hooks/useBookCover'
+import { checkTierBadges } from '../lib/badges'
+import BadgeToast from '../components/BadgeToast'
+import NotificationSheet from '../components/NotificationSheet'
 
 function clamp(n, min, max) {
   return Math.min(max, Math.max(min, n))
@@ -39,9 +42,14 @@ function formatPct(pct) {
 }
 
 function BookInfoSheet({ book, progress, onClose, onDelete, onRead }) {
-  const { url: coverUrl, status: coverStatus } = useBookCover(book.title, book.author, book.format === 'epub')
+  const { url: coverUrl, status: coverStatus, genre, year } = useBookCover(book.title, book.author, book.format === 'epub')
   const [coverError, setCoverError] = useState(false)
   const [coverImgLoaded, setCoverImgLoaded] = useState(false)
+
+  useEffect(() => {
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = '' }
+  }, [])
   const wpm = parseInt(localStorage.getItem('wpm') || '250')
   const started = progress?.id != null
   const pct = calcProgressPct(book, progress)
@@ -168,7 +176,7 @@ function BookInfoSheet({ book, progress, onClose, onDelete, onRead }) {
           </span>
 
           {/* Title */}
-          <h2 className="text-[20px] font-bold text-neutral-8 mt-3 leading-snug">
+          <h2 className="text-[18px] font-bold text-neutral-8 mt-3 leading-snug">
             {book.title}
           </h2>
 
@@ -184,17 +192,17 @@ function BookInfoSheet({ book, progress, onClose, onDelete, onRead }) {
           <div className="grid grid-cols-2 gap-3 mt-5">
             <div className="bg-neutral-1 rounded-2xl px-4 py-3">
               <p className="text-[11px] text-neutral-5 uppercase tracking-wider font-semibold">Pages</p>
-              <p className="text-[22px] font-bold text-neutral-8 mt-0.5">{book.totalPages}</p>
+              <p className="text-[18px] font-bold text-neutral-8 mt-0.5">{book.totalPages}</p>
             </div>
             <div className="bg-neutral-1 rounded-2xl px-4 py-3">
               <p className="text-[11px] text-neutral-5 uppercase tracking-wider font-semibold">Words</p>
-              <p className="text-[22px] font-bold text-neutral-8 mt-0.5">
+              <p className="text-[18px] font-bold text-neutral-8 mt-0.5">
                 {totalWords >= 1000 ? `${Math.round(totalWords / 1000)}k` : totalWords}
               </p>
             </div>
             <div className="bg-neutral-1 rounded-2xl px-4 py-3">
               <p className="text-[11px] text-neutral-5 uppercase tracking-wider font-semibold">Progress</p>
-              <p className={`text-[22px] font-bold mt-0.5 ${completed ? 'text-green-500' : 'text-neutral-8'}`}>
+              <p className={`text-[18px] font-bold mt-0.5 ${completed ? 'text-green-500' : 'text-neutral-8'}`}>
                 {completed ? '✓ Done' : formatPct(pct)}
               </p>
               {!completed && started && (
@@ -205,10 +213,22 @@ function BookInfoSheet({ book, progress, onClose, onDelete, onRead }) {
             </div>
             <div className="bg-neutral-1 rounded-2xl px-4 py-3">
               <p className="text-[11px] text-neutral-5 uppercase tracking-wider font-semibold">Time left</p>
-              <p className="text-[22px] font-bold text-neutral-8 mt-0.5">
+              <p className="text-[18px] font-bold text-neutral-8 mt-0.5">
                 {completed ? '—' : `${minutesLeft}m`}
               </p>
             </div>
+            {year && (
+              <div className="bg-neutral-1 rounded-2xl px-4 py-3">
+                <p className="text-[11px] text-neutral-5 uppercase tracking-wider font-semibold">Published</p>
+                <p className="text-[18px] font-bold text-neutral-8 mt-0.5">{year}</p>
+              </div>
+            )}
+            {genre && (
+              <div className={`bg-neutral-1 rounded-2xl px-4 py-3 ${year ? '' : 'col-span-1'}`}>
+                <p className="text-[11px] text-neutral-5 uppercase tracking-wider font-semibold">Genre</p>
+                <p className="text-[15px] font-bold text-neutral-8 mt-0.5 leading-snug">{genre}</p>
+              </div>
+            )}
           </div>
 
           {/* Uploaded */}
@@ -340,6 +360,16 @@ export default function Home() {
   // Only show the skeleton on the very first load (cache is empty)
   const [loading, setLoading] = useState(() => cache.books === null)
   const [infoBook, setInfoBook] = useState(null)
+  const [badgeQueue, setBadgeQueue] = useState([])
+  const [showNotifications, setShowNotifications] = useState(false)
+  const [notifCount, setNotifCount] = useState(0)
+  const [tab, setTab] = useState('reading')
+
+  useEffect(() => {
+    api.get('/notifications')
+      .then(r => setNotifCount(Array.isArray(r.data) ? r.data.length : 0))
+      .catch(() => {})
+  }, [])
 
   const load = useCallback(async () => {
     const cold = cache.books === null
@@ -384,6 +414,9 @@ export default function Home() {
       setBooks(bookList)
       setProgressMap(map)
       setLastRead(mostRecent)
+
+      const collectorBadges = checkTierBadges('collector', bookList.length)
+      if (collectorBadges.length > 0) setBadgeQueue(q => [...q, ...collectorBadges])
     } catch {}
 
     setLoading(false)
@@ -408,8 +441,37 @@ export default function Home() {
       setBooks(nextBooks)
       setProgressMap(nextMap)
       setLastRead(nextLastRead)
-    } catch {}
+    } catch {
+      alert('Could not delete book. Please try again.')
+    }
   }
+
+  const goal = (() => {
+    try { return JSON.parse(localStorage.getItem('readingGoal') || 'null') } catch { return null }
+  })()
+
+  const todayStats = (() => {
+    try {
+      const today = new Date().toISOString().slice(0, 10)
+      const stored = JSON.parse(localStorage.getItem('readingToday') || 'null')
+      return stored?.date === today ? { words: stored.words || 0, pages: stored.pages || 0 } : { words: 0, pages: 0 }
+    } catch { return { words: 0, pages: 0 } }
+  })()
+
+  const goalCurrent = goal?.enabled ? (goal.type === 'words' ? todayStats.words : todayStats.pages) : 0
+  const goalPct = goal?.enabled ? Math.min(100, Math.round((goalCurrent / goal.target) * 100)) : 0
+  const goalDone = goal?.enabled && goalCurrent >= goal.target
+
+  const { reading, planToRead, finished } = useMemo(() => {
+    const reading = [], planToRead = [], finished = []
+    for (const book of books) {
+      const p = progressMap[book.id] ?? null
+      if (isCompleted(book, p)) finished.push(book)
+      else if (p?.id != null) reading.push(book)
+      else planToRead.push(book)
+    }
+    return { reading, planToRead, finished }
+  }, [books, progressMap])
 
   const wpm = parseInt(localStorage.getItem('wpm') || '250')
   const lastReadPct = lastRead ? calcProgressPct(lastRead.book, lastRead) : 0
@@ -421,27 +483,37 @@ export default function Home() {
   return (
     <div className="flex flex-col min-h-dvh pb-24">
       {/* Header */}
-      <div className="px-6 pt-14 pb-6">
-        <div className="flex items-start justify-between">
-          <h1 className="text-[26px] font-bold text-neutral-8 leading-tight">
-            Select a file and<br />start{' '}
-            <span className="text-primary-1">reading</span>
-          </h1>
-          <div className="flex gap-3 mt-1">
-            <button onClick={() => navigate('/account')} className="w-12 h-12 rounded-full bg-shade-white shadow-card flex items-center justify-center active:opacity-70">
-              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" className="text-neutral-6">
-                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.7"/>
-                <circle cx="12" cy="9.5" r="2.8" stroke="currentColor" strokeWidth="1.7"/>
-                <path d="M6.5 19.5c0-3 2.5-5 5.5-5s5.5 2 5.5 5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/>
-              </svg>
-            </button>
-            <button onClick={() => navigate('/search')} className="w-12 h-12 rounded-full bg-shade-white shadow-card flex items-center justify-center active:opacity-70">
-              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" className="text-neutral-6">
-                <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="1.7"/>
-                <path d="M20 20l-3-3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/>
-              </svg>
-            </button>
-          </div>
+      <div className="px-6 pt-14 pb-6 flex items-start justify-between">
+        <h1 className="text-[22px] font-bold text-neutral-8 leading-tight">
+          Select a file and<br />start{' '}
+          <span className="text-primary-1">reading</span>
+        </h1>
+        <div className="flex items-center gap-2 mt-1 shrink-0">
+          <button
+            onClick={() => navigate('/upload')}
+            className="w-10 h-10 flex items-center justify-center rounded-2xl bg-shade-white shadow-card active:opacity-70"
+            aria-label="Upload"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="text-neutral-6">
+              <path d="M12 15V3M12 3l-4 4M12 3l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M4 17v1a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+            </svg>
+          </button>
+          <button
+            onClick={() => setShowNotifications(true)}
+            className="relative w-10 h-10 flex items-center justify-center rounded-2xl bg-shade-white shadow-card active:opacity-70"
+            aria-label="Notifications"
+          >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="text-neutral-6">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M13.73 21a2 2 0 0 1-3.46 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          {notifCount > 0 && (
+            <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-error-2 flex items-center justify-center">
+              <span className="text-[10px] font-bold text-shade-white">{notifCount > 9 ? '9+' : notifCount}</span>
+            </span>
+          )}
+          </button>
         </div>
       </div>
 
@@ -452,7 +524,7 @@ export default function Home() {
             <p className="text-[11px] font-bold text-primary-1 uppercase tracking-widest mb-3">
               Your last read
             </p>
-            <p className="text-[18px] font-bold text-neutral-8 leading-snug mb-1">
+            <p className="text-[16px] font-bold text-neutral-8 leading-snug mb-1">
               {lastRead.book.title}
             </p>
             <p className="text-[13px] text-neutral-4 mb-4">
@@ -473,11 +545,70 @@ export default function Home() {
           </div>
         )}
 
-        {/* Recent Files */}
+        {/* Daily goal */}
+        {goal?.enabled && (
+          <div className={`rounded-3xl p-5 shadow-card-lg ${goalDone ? 'bg-primary-1' : 'bg-shade-white'}`}>
+            <p className={`text-[11px] font-bold uppercase tracking-widest mb-2 ${goalDone ? 'text-shade-white/70' : 'text-primary-1'}`}>
+              Daily goal
+            </p>
+            {goalDone ? (
+              <>
+                <p className="text-[16px] font-bold text-shade-white">Goal complete!</p>
+                <p className="text-[13px] text-shade-white/80 mt-1">
+                  {goalCurrent.toLocaleString()} {goal.type} read today
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-[16px] font-bold text-neutral-8">
+                  {goalCurrent.toLocaleString()}{' '}
+                  <span className="text-neutral-4 text-[14px] font-medium">
+                    / {goal.target.toLocaleString()} {goal.type}
+                  </span>
+                </p>
+                <div className="mt-3 h-2 rounded-full bg-neutral-2 overflow-hidden">
+                  <div
+                    className="h-full bg-primary-1 rounded-full transition-all"
+                    style={{ width: `${goalPct}%` }}
+                  />
+                </div>
+                <p className="text-[12px] text-neutral-4 mt-2">
+                  {(goal.target - goalCurrent).toLocaleString()} {goal.type} to go · {goalPct}%
+                </p>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Library tabs */}
         <div>
-          <h2 className="text-[20px] font-bold text-neutral-8 mb-3">
-            {books.length === 0 && !loading ? 'No files yet' : 'Recent files'}
-          </h2>
+          {/* Tab bar */}
+          <div className="flex gap-2 mb-4">
+            {[
+              { key: 'reading',    label: 'Reading',      count: reading.length },
+              { key: 'plan',       label: 'To read', count: planToRead.length },
+              { key: 'finished',   label: 'Finished',     count: finished.length },
+            ].map(t => (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[13px] font-semibold transition-colors ${
+                  tab === t.key
+                    ? 'bg-primary-1 text-shade-white'
+                    : 'bg-shade-white text-neutral-5 shadow-card'
+                }`}
+              >
+                {t.label}
+                {t.count > 0 && (
+                  <span className={`text-[11px] font-bold rounded-full px-1.5 py-0.5 ${
+                    tab === t.key ? 'bg-shade-white/20 text-shade-white' : 'bg-neutral-1 text-neutral-4'
+                  }`}>
+                    {t.count > 9 ? '9+' : t.count}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
 
           {loading ? (
             <div className="flex flex-col gap-3">
@@ -485,29 +616,39 @@ export default function Home() {
                 <div key={i} className="bg-shade-white rounded-2xl h-16 animate-pulse" />
               ))}
             </div>
-          ) : books.length === 0 ? (
-            <div className="bg-shade-white rounded-3xl p-6 text-center shadow-card-lg">
-              <p className="text-neutral-4 text-sm mb-1">Your library is empty</p>
-              <button
-                onClick={() => navigate('/upload')}
-                className="text-primary-1 text-sm font-semibold"
-              >
-                Upload your first file →
-              </button>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {books.map(book => (
-                <BookItem
-                  key={book.id}
-                  book={book}
-                  progress={progressMap[book.id] ?? null}
-                  onClick={id => navigate(`/reader/${id}`)}
-                  onInfo={setInfoBook}
-                />
-              ))}
-            </div>
-          )}
+          ) : (() => {
+            const list = tab === 'reading' ? reading : tab === 'plan' ? planToRead : finished
+            if (list.length === 0) {
+              const empty = {
+                reading: 'No books in progress.',
+                plan: 'Nothing queued up yet.',
+                finished: 'No finished books yet.',
+              }[tab]
+              return (
+                <div className="bg-shade-white rounded-3xl p-6 text-center shadow-card-lg">
+                  <p className="text-neutral-4 text-sm mb-1">{empty}</p>
+                  {books.length === 0 && (
+                    <button onClick={() => navigate('/upload')} className="text-primary-1 text-sm font-semibold">
+                      Upload your first file →
+                    </button>
+                  )}
+                </div>
+              )
+            }
+            return (
+              <div className="flex flex-col gap-3">
+                {list.map(book => (
+                  <BookItem
+                    key={book.id}
+                    book={book}
+                    progress={progressMap[book.id] ?? null}
+                    onClick={id => navigate(`/reader/${id}`)}
+                    onInfo={setInfoBook}
+                  />
+                ))}
+              </div>
+            )
+          })()}
         </div>
       </div>
 
@@ -520,6 +661,17 @@ export default function Home() {
           onDelete={handleDelete}
           onRead={id => navigate(`/reader/${id}`)}
         />
+      )}
+
+      {showNotifications && (
+        <NotificationSheet
+          onClose={() => setShowNotifications(false)}
+          onCountChange={setNotifCount}
+        />
+      )}
+
+      {badgeQueue.length > 0 && (
+        <BadgeToast badgeId={badgeQueue[0]} onDismiss={() => setBadgeQueue(q => q.slice(1))} />
       )}
 
       <BottomNav />

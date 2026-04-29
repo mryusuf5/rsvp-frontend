@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="SshConfigs">
+    <configs>
+      <sshConfig host="yusufz.ssh.transip.me" id="659d2318-1a52-4473-908d-fe612b477516" keyPath="\\wsl.localhost\Ubuntu\home\mryusuf\.ssh\transip\transip" port="22" nameFormat="DESCRIPTIVE" username="yusufyildiznl" useOpenSSHConfig="true" />
+    </configs>
+  </component>
+</project>

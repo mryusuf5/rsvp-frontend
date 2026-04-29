@@ -18,12 +18,7 @@ export default function Register() {
       await register(name, password)
       navigate('/')
     } catch (err) {
-      const violations = err.response?.data?.violations
-      if (violations?.length) {
-        setError(violations.map(v => v.message).join('. '))
-      } else {
-        setError(err.response?.data?.message || err.response?.data?.detail || 'Registration failed')
-      }
+      setError(err.response?.data?.message || 'Registration failed. Please try again.')
     } finally {
       setLoading(false)
     }

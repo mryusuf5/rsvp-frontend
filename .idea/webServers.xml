@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="1546e269-bd07-44bb-8443-7602bd154e4a" name="yusuf">
+        <fileTransfer rootFolder="/data/sites/web/yusufyildiznl" accessType="SFTP" host="yusufz.ssh.transip.me" port="22" sshConfigId="659d2318-1a52-4473-908d-fe612b477516" sshConfig="yusufyildiznl@yusufz.ssh.transip.me:22 key" keyPair="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>
