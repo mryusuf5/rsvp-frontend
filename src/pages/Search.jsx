@@ -201,7 +201,7 @@ export default function Search() {
           ) : (
             <div className="flex flex-col gap-3">
               {filteredBooks.map(book => (
-                <SearchResult key={book.id} book={book} onClick={() => navigate(`/reader/${book.id}`)} />
+                <SearchResult key={book.id} book={book} onClick={() => navigate(`/books/${book.id}`)} />
               ))}
             </div>
           )

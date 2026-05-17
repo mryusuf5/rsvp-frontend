@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import api from '../lib/api'
 import { checkTierBadges, getReadingStats, updateReadingStats } from '../lib/badges'
 import BadgeToast from '../components/BadgeToast'
+import { splitWords } from '../lib/readerText'
 
 function WordDisplay({ word }) {
   if (!word) return <span className="text-neutral-6 text-2xl sm:text-4xl font-bold">•••</span>
@@ -48,13 +49,10 @@ function WordDisplay({ word }) {
   )
 }
 
-function splitWords(content) {
-  return content.split(/\s+/).filter(w => w.length > 0)
-}
-
 export default function Reader() {
   const { bookId } = useParams()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
 
   const [book, setBook] = useState(null)
   const [words, setWords] = useState([])
@@ -208,12 +206,20 @@ export default function Reader() {
         stateRef.current.book = b
         setContentStart(contentStartRes.data.pageNumber)
 
-        const pg = progressRes.data.pageNumber || 1
-        const wi = progressRes.data.wordIndex || 0
+        const requestedPage = Number(searchParams.get('page'))
+        const requestedWord = Number(searchParams.get('word'))
+        const hasRequestedStart = Number.isFinite(requestedPage) && requestedPage > 0
+        const totalPages = Math.max(1, Number(b.totalPages || 1))
+        const pg = hasRequestedStart
+          ? Math.min(totalPages, Math.max(1, requestedPage))
+          : (progressRes.data.pageNumber || 1)
 
         const pageRes = await api.get(`/books/${bookId}/pages/${pg}`)
         setPageContent(pageRes.data.content || '')
         const w = splitWords(pageRes.data.content)
+        const wi = hasRequestedStart
+          ? Math.min(Math.max(0, requestedWord || 0), Math.max(0, w.length - 1))
+          : (progressRes.data.wordIndex || 0)
 
         setWords(w)
         stateRef.current.words = w
@@ -222,6 +228,12 @@ export default function Reader() {
         setCurrentPage(pg)
         stateRef.current.currentPage = pg
         setChapterTitle(pageRes.data.chapterTitle || '')
+
+        if (hasRequestedStart) {
+          localStorage.setItem('lastReadAt', new Date().toISOString())
+          api.put(`/progress/${bookId}`, { pageNumber: pg, wordIndex: wi }).catch(() => {})
+          navigate(`/reader/${bookId}`, { replace: true })
+        }
       } catch (err) {
         console.error(err)
       }

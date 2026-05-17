@@ -537,7 +537,7 @@ export default function Home() {
               )}
             </p>
             <button
-              onClick={() => navigate(`/reader/${lastRead.book.id}`)}
+              onClick={() => navigate(`/books/${lastRead.book.id}`)}
               className="bg-primary-1 text-shade-white text-[14px] font-semibold rounded-full px-5 py-2.5 active:opacity-80 transition-opacity"
             >
               Continue reading
@@ -642,7 +642,7 @@ export default function Home() {
                     key={book.id}
                     book={book}
                     progress={progressMap[book.id] ?? null}
-                    onClick={id => navigate(`/reader/${id}`)}
+                    onClick={id => navigate(`/books/${id}`)}
                     onInfo={setInfoBook}
                   />
                 ))}
@@ -659,7 +659,7 @@ export default function Home() {
           progress={progressMap[infoBook.id] ?? null}
           onClose={() => setInfoBook(null)}
           onDelete={handleDelete}
-          onRead={id => navigate(`/reader/${id}`)}
+          onRead={id => navigate(`/books/${id}`)}
         />
       )}
 
